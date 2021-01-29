@@ -67,6 +67,39 @@ func NewStrimzi(p *p.Provider) (providers.ClowderProvider, error) {
 	return kafkaProvider, kafkaProvider.configureBrokers()
 }
 
+func (s *strimziProvider) CreateLoggingTopic(app *crd.ClowdApp) error {
+	loggingTopic := strimzi.KafkaTopic{}
+
+	update, err := utils.UpdateOrErr(s.Client.Get(s.Ctx, types.NamespacedName{
+		Namespace: getKafkaNamespace(s.Env),
+		Name:      KafkaLoggingTopicName,
+	}, &loggingTopic))
+
+	if err != nil {
+		return err
+	}
+
+	labels := p.Labels{
+		"strimzi.io/cluster": s.Env.Spec.Providers.Kafka.ClusterName,
+		"env":                app.Spec.EnvName,
+		// If we label it with the app name, since app names should be
+		// unique? can we use for delete selector?
+	}
+
+	loggingTopic.SetName(KafkaLoggingTopicName)
+	loggingTopic.SetNamespace(getKafkaNamespace(s.Env))
+	loggingTopic.SetLabels(labels)
+
+	loggingTopic.Spec.Partitions = utils.Int32(3)
+	loggingTopic.Spec.Replicas = utils.Int32(3)
+
+	if err = update.Apply(s.Ctx, s.Client, &loggingTopic); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *strimziProvider) Provide(app *crd.ClowdApp, c *config.AppConfig) error {
 	if app.Spec.Cyndi.Enabled {
 		err := createCyndiPipeline(
@@ -81,6 +114,12 @@ func (s *strimziProvider) Provide(app *crd.ClowdApp, c *config.AppConfig) error 
 		}
 	}
 
+	err := s.CreateLoggingTopic(app)
+
+	if err != nil {
+		return err
+	}
+
 	if len(app.Spec.KafkaTopics) == 0 {
 		return nil
 	}
@@ -93,7 +132,7 @@ func (s *strimziProvider) Provide(app *crd.ClowdApp, c *config.AppConfig) error 
 	}
 
 	appList := crd.ClowdAppList{}
-	err := s.Client.List(s.Ctx, &appList)
+	err = s.Client.List(s.Ctx, &appList)
 
 	for _, topic := range app.Spec.KafkaTopics {
 
